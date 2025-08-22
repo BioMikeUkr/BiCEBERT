@@ -28,6 +28,7 @@ class BiCEBertConfig(PretrainedConfig):
         num_hidden_layers: int = 12,
         num_attention_heads: int = 12,
         left_heads_ratio: float = 0.5,
+        use_alibi = True,
         hidden_activation: str = "gelu",
         initializer_range: float = 0.02,
         initializer_cutoff_factor: float = 2.0,
@@ -85,6 +86,7 @@ class BiCEBertConfig(PretrainedConfig):
         self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
+        self.use_alibi = use_alibi
 
         if not (0.0 < self.left_heads_ratio < 1.0):
             raise ValueError("left_heads_ratio must be in (0, 1)")

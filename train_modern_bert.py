@@ -1,6 +1,5 @@
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling, Trainer, TrainingArguments, set_seed
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling, Trainer, TrainingArguments, set_seed, ModernBertConfig, ModernBertForMaskedLM
 from datasets import Dataset, load_dataset
-from src import BiCEBertConfig, BiCEBertForMaskedLM
 import random
 
 set_seed(42)
@@ -39,7 +38,7 @@ if tokenizer.sep_token_id is None: specials["sep_token"] = "<sep>"
 if specials:
     tokenizer.add_special_tokens(specials)
 
-cfg = BiCEBertConfig(
+cfg = ModernBertConfig(
     vocab_size=len(tokenizer),
     num_hidden_layers=10,
     num_attention_heads=6,
@@ -52,7 +51,7 @@ cfg = BiCEBertConfig(
     sep_token_id=(tokenizer.sep_token_id if tokenizer.sep_token_id is not None else tokenizer.eos_token_id),
 )
 
-model = BiCEBertForMaskedLM(cfg)
+model = ModernBertForMaskedLM(cfg)
 if specials:
     model.resize_token_embeddings(len(tokenizer))
 
@@ -68,7 +67,7 @@ val_ds = val_ds.map(tokenize, batched=True, remove_columns=["text"])
 collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.3)
 
 args = TrainingArguments(
-    output_dir="BiCEbert-mlm",
+    output_dir="modern_bert",
     per_device_train_batch_size=32,
     per_device_eval_batch_size=32,
     gradient_accumulation_steps=1,

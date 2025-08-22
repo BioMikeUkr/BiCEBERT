@@ -1,10 +1,9 @@
 import torch
-from transformers import AutoTokenizer
-from src import BiCEBertForMaskedLM
+from transformers import AutoTokenizer, ModernBertConfig, ModernBertForMaskedLM
 
 def load_model(model_dir="BiCEbert-mlm-final"):
     tokenizer = AutoTokenizer.from_pretrained("answerdotai/ModernBERT-base", add_prefix_space=True)
-    model = BiCEBertForMaskedLM.from_pretrained(model_dir)
+    model = ModernBertForMaskedLM.from_pretrained(model_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device).eval()
     return tokenizer, model, device
@@ -41,8 +40,7 @@ if __name__ == "__main__":
     
     examples = [
     "Paris [MASK] the capital of France.",
-    "London is the capital of [MASK].",
-    "Paris is the [MASK] of France.",
+    "Paris a the [MASK] of France.",
     "The sun [MASK] yellow.",
     "Dogs [MASK] four legs.", 
     "Water [MASK] at 100 degrees.",
@@ -63,7 +61,7 @@ if __name__ == "__main__":
     "Fire is [MASK].",
     "Babies [MASK] milk.",
 ]
-    out = predict_masks(examples, model_dir="BiCEbert-mlm/checkpoint-10000", top_k=5)
+    out = predict_masks(examples, model_dir="modern_bert/checkpoint-4000", top_k=5)
     for item in out:
         print(item["text"])
         for mi, cand in enumerate(item["predictions"], 1):

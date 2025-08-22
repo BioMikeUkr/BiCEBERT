@@ -13,8 +13,6 @@ from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
-
-
 logger = logging.get_logger(__name__)
 
 
@@ -60,6 +58,12 @@ class BiCEBertAttention(nn.Module):
         self.out_drop = nn.Dropout(config.attention_dropout) if config.attention_dropout > 0.0 else nn.Identity()
         self.attention_dropout = config.attention_dropout
 
+        self.use_alibi = bool(getattr(config, "use_alibi", True))
+        self.alibi_min_slope = float(getattr(config, "alibi_min_slope", 0.01))
+        self.alibi_max_slope = float(getattr(config, "alibi_max_slope", 1.0))
+        self.register_buffer("alibi_left_slopes", None, persistent=False)
+        self.register_buffer("alibi_right_slopes", None, persistent=False)
+
     def _directional_masks(self, attention_mask: torch.Tensor, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
         pad = _prepare_4d_attention_mask(attention_mask, dtype)
         T = attention_mask.shape[1]
@@ -69,11 +73,43 @@ class BiCEBertAttention(nn.Module):
         right = torch.tril(torch.full_like(z, neg), -1)[None, None, :, :] + pad
         return left, right
 
+    def _maybe_init_alibi_slopes(self, device: torch.device, dtype: torch.dtype):
+        if not self.use_alibi:
+            return
+        if self.alibi_left_slopes is not None and self.alibi_right_slopes is not None:
+            return
+        slopes = torch.logspace(
+            math.log10(self.alibi_max_slope),
+            math.log10(self.alibi_min_slope),
+            steps=self.num_heads,
+            device=device,
+            dtype=dtype,
+        )
+        self.alibi_left_slopes = slopes[: self.n_left].view(1, self.n_left, 1, 1)
+        self.alibi_right_slopes = slopes[self.n_left :].view(1, self.n_right, 1, 1) if self.n_right > 0 else None
+
+    def _alibi_biases(self, T: int, device: torch.device, dtype: torch.dtype) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if not self.use_alibi:
+            return None, None
+        self._maybe_init_alibi_slopes(device, dtype)
+        pos = torch.arange(T, device=device)
+        i = pos.view(T, 1)
+        j = pos.view(1, T)
+        d_left = (i - j).clamp_min(0).to(dtype).view(1, 1, T, T)
+        d_right = (j - i).clamp_min(0).to(dtype).view(1, 1, T, T)
+        left_bias = -d_left * self.alibi_left_slopes
+        right_bias = None
+        if self.n_right > 0:
+            right_bias = -d_right * self.alibi_right_slopes
+        return left_bias, right_bias
+
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, output_attentions: bool = False):
         B, T, C = x.shape
         if attention_mask is None:
             attention_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
         left_mask, right_mask = self._directional_masks(attention_mask, x.dtype)
+        left_alibi, right_alibi = self._alibi_biases(T, x.device, x.dtype)
+
         qkv = self.Wqkv(x).view(B, T, 3, self.num_heads, self.head_dim).transpose(1, 3)
         q, k, v = qkv.unbind(dim=2)
         s = self.head_dim**-0.5
@@ -81,6 +117,8 @@ class BiCEBertAttention(nn.Module):
         lq, lk, lv = q[:, :self.n_left], k[:, :self.n_left], v[:, :self.n_left]
         ls = torch.matmul(lq, lk.transpose(-2, -1)) * s
         ls = ls + left_mask
+        if left_alibi is not None:
+            ls = ls + left_alibi
         la = F.softmax(ls, dim=-1, dtype=torch.float32).to(lq.dtype)
         la = F.dropout(la, p=self.attention_dropout, training=self.training)
         lc = torch.matmul(la, lv)
@@ -89,6 +127,8 @@ class BiCEBertAttention(nn.Module):
             rq, rk, rv = q[:, self.n_left:], k[:, self.n_left:], v[:, self.n_left:]
             rs = torch.matmul(rq, rk.transpose(-2, -1)) * s
             rs = rs + right_mask
+            if right_alibi is not None:
+                rs = rs + right_alibi
             ra = F.softmax(rs, dim=-1, dtype=torch.float32).to(rq.dtype)
             ra = F.dropout(ra, p=self.attention_dropout, training=self.training)
             rc = torch.matmul(ra, rv)
